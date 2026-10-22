@@ -8,11 +8,18 @@ on:
         description: "Application URL to test"
         required: true
         type: string
+
       execution_id:
-        description: "Execution ID for traceability"
+        description: "Unique QA execution ID"
         required: false
         type: string
         default: "manual-run"
+
+      test_cases:
+        description: "JSON string containing generated test cases"
+        required: false
+        type: string
+        default: '{"test_cases":[]}'
 
 permissions:
   contents: read
@@ -25,6 +32,7 @@ jobs:
     env:
       BASE_URL: ${{ inputs.target_url }}
       EXECUTION_ID: ${{ inputs.execution_id }}
+      TEST_CASES_JSON: ${{ inputs.test_cases }}
       CI: "true"
 
     steps:
@@ -40,13 +48,30 @@ jobs:
       - name: Install dependencies
         run: npm install --no-audit --no-fund
 
+      - name: Validate input and test cases
+        run: |
+          node -e "
+            const raw = process.env.TEST_CASES_JSON || '{\"test_cases\":[]}';
+            const parsed = JSON.parse(raw);
+            const cases = Array.isArray(parsed)
+              ? parsed
+              : parsed.test_cases;
+
+            if (!Array.isArray(cases)) {
+              throw new Error('Expected a test_cases array');
+            }
+
+            console.log('Execution ID:', process.env.EXECUTION_ID);
+            console.log('Test cases received:', cases.length);
+          "
+
       - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
 
-      - name: Run Playwright tests
+      - name: Execute Playwright test cases
         id: tests
         continue-on-error: true
-        run: npm test
+        run: npx playwright test
 
       - name: Generate Allure HTML report
         if: always()
@@ -57,14 +82,14 @@ jobs:
             npx allure generate allure-results \
               --clean -o allure-report
           else
-            echo "No Allure results available to generate a report."
+            echo "No Allure results found; report was not generated."
           fi
 
-      - name: Upload Playwright and Allure artifacts
+      - name: Upload test results and reports
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: qa-results
+          name: qa-results-${{ github.run_id }}
           path: |
             allure-results/
             allure-report/
@@ -73,6 +98,6 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
 
-      - name: Mark run as failed if tests failed
+      - name: Mark workflow as failed when tests fail
         if: steps.tests.outcome == 'failure'
         run: exit 1
