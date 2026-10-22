@@ -1,3 +1,4 @@
+
 name: QA Batched Runner
 
 on:
@@ -7,6 +8,11 @@ on:
         description: "Application URL to test"
         required: true
         type: string
+      execution_id:
+        description: "Execution ID for traceability"
+        required: false
+        type: string
+        default: "manual-run"
 
 permissions:
   contents: read
@@ -14,37 +20,59 @@ permissions:
 jobs:
   playwright:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
+
+    env:
+      BASE_URL: ${{ inputs.target_url }}
+      EXECUTION_ID: ${{ inputs.execution_id }}
+      CI: "true"
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
+      - name: Check out repository
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@v7
         with:
-          node-version: 22
-          cache: npm
+          node-version: "22"
+          package-manager-cache: false
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install --no-audit --no-fund
 
-      - name: Install Playwright browser
+      - name: Install Playwright Chromium
         run: npx playwright install --with-deps chromium
 
       - name: Run Playwright tests
-        run: npx playwright test
-        env:
-          BASE_URL: ${{ inputs.target_url }}
+        id: tests
+        continue-on-error: true
+        run: npm test
 
-      - name: Upload test results
+      - name: Generate Allure HTML report
         if: always()
-        uses: actions/upload-artifact@v5
+        shell: bash
+        run: |
+          if [ -d "allure-results" ] && \
+             find allure-results -type f -print -quit | grep -q .; then
+            npx allure generate allure-results \
+              --clean -o allure-report
+          else
+            echo "No Allure results available to generate a report."
+          fi
+
+      - name: Upload Playwright and Allure artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
         with:
-          name: qa-test-results
+          name: qa-results
           path: |
-            test-results/
-            playwright-report/
             allure-results/
+            allure-report/
+            playwright-report/
+            test-results/
           if-no-files-found: ignore
           retention-days: 7
+
+      - name: Mark run as failed if tests failed
+        if: steps.tests.outcome == 'failure'
+        run: exit 1
